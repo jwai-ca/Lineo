@@ -29,7 +29,7 @@ before(async () => {
   const port = 20000 + Math.floor(Math.random() * 20000);
   app = spawn(process.execPath, [fileURLToPath(new URL("../server/server.js", import.meta.url))], {
     env: { ...process.env, PORT: String(port), OPENAI_API_KEY: "sk-secret", GEMINI_API_KEY: "g-secret", APP_PASSCODE: "panda",
-      RATE_LIMIT_PER_HOUR: "4", OPENAI_BASE_URL: `http://127.0.0.1:${fakePort}/openai`, GEMINI_BASE_URL: `http://127.0.0.1:${fakePort}/gemini` },
+      RATE_LIMIT_PER_HOUR: "6", OPENAI_BASE_URL: `http://127.0.0.1:${fakePort}/openai`, GEMINI_BASE_URL: `http://127.0.0.1:${fakePort}/gemini` },
     stdio: ["ignore", "pipe", "inherit"],
   });
   await new Promise((r) => app.stdout.on("data", (d) => { if (String(d).includes("running")) r(); }));
@@ -81,8 +81,18 @@ test("static page is served and path traversal is blocked", async () => {
   assert.notEqual(bad.status, 200);
 });
 
+test("detail level and background choice change the prompt", async () => {
+  const r1 = await redraw({ image: JPEG, passcode: "panda", provider: "openai", detail: 0 });
+  const simple = seen.at(-1).body;
+  const r2 = await redraw({ image: JPEG, passcode: "panda", provider: "openai", detail: 4, background: true });
+  const rich = seen.at(-1).body;
+  assert.equal(r1.status, 200); assert.equal(r2.status, 200);
+  assert.match(simple, /VERY SIMPLE/); assert.match(simple, /remove the whole background/); assert.doesNotMatch(simple, /#0000FF/);
+  assert.match(rich, /VERY DETAILED/); assert.match(rich, /#0000FF/);
+});
+
 test("rate limit kicks in", async () => {
   let last;
-  for (let i = 0; i < 4; i++) last = await redraw({ image: JPEG, passcode: "panda" });
+  for (let i = 0; i < 6; i++) last = await redraw({ image: JPEG, passcode: "panda" });
   assert.equal(last.status, 429);
 });

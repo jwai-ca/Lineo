@@ -29,12 +29,27 @@ const STYLE = {
   cute: "Draw it in a cute, friendly cartoon style with slightly simplified, rounded shapes and expressive faces.",
   real: "Stay faithful to the photo: keep the real proportions, pose and important details, drawn like a professional coloring book illustration.",
 };
-const prompt = (style) =>
+// Five clearly different levels of detail, from a toddler's outline to an intricate page.
+const DETAIL = [
+  "Level of detail: VERY SIMPLE. Draw only the outer silhouette and the few most essential inner lines (for example eyes and mouth). " +
+    "Use very thick lines and very large open areas, like a coloring page for a 3-year-old. No texture, no patterns, no small parts; at most about 15 shapes in total.",
+  "Level of detail: SIMPLE. Bold outlines plus the main features only. Large areas to color, no texture lines, no small decorations.",
+  "Level of detail: MEDIUM. Clear outlines with the main features and a few hints of texture or folds. A balanced mix of large and medium areas.",
+  "Level of detail: DETAILED. Include many features: textures, folds, patterns, hair or fur groups and accessories, with plenty of smaller areas to color.",
+  "Level of detail: VERY DETAILED and intricate, like a coloring book for older children. Rich textures, individual hair or fur strands, decorative patterns " +
+    "on clothing and surfaces, many small areas to color, while every line stays clean and every shape stays closed.",
+];
+
+const prompt = ({ style, detail, background }) =>
   "Redraw this photo as a printable coloring book page for children aged 3 to 10. " +
-  "Keep only the main subject and remove the whole background. " +
-  "Use clean, smooth, confident black outlines on a pure white background, with closed shapes that are easy to color in. " +
+  (background
+    ? "Keep the scene: draw the main subject AND the background. Draw ALL lines of the main subject in pure black (#000000). " +
+      "Draw ALL lines of the background and surroundings in pure blue (#0000FF), never black. Do not use any other colors. "
+    : "Keep only the main subject and remove the whole background. ") +
+  "Use clean, smooth, confident outlines on a pure white background, with closed shapes that are easy to color in. " +
   "No shading, no gray tones, no hatching, no color fills, no text, no border, no frame. " +
-  (STYLE[style] || STYLE.cute) + " Center the subject and leave a white margin around it.";
+  (STYLE[style] || STYLE.cute) + " " + DETAIL[detail] +
+  (background ? " Keep the original composition of the photo." : " Center the subject and leave a white margin around it.");
 
 class HttpError extends Error { constructor(status, message) { super(message); this.status = status; } }
 
@@ -49,12 +64,12 @@ async function upstreamError(r, who) {
   return new HttpError(502, `${who} 出错了（${r.status}），请稍后再试。`);
 }
 
-async function callOpenAI(jpeg, style, ratio) {
+async function callOpenAI(jpeg, opts, ratio) {
   const p = PROVIDERS.openai;
   const size = ratio > 1.15 ? "1536x1024" : ratio < 0.87 ? "1024x1536" : "1024x1024";
   const fd = new FormData();
   fd.append("model", p.model);
-  fd.append("prompt", prompt(style));
+  fd.append("prompt", prompt(opts));
   fd.append("size", size);
   fd.append("quality", env.OPENAI_QUALITY || "medium");
   fd.append("image[]", new Blob([jpeg], { type: "image/jpeg" }), "photo.jpg");
@@ -68,10 +83,10 @@ async function callOpenAI(jpeg, style, ratio) {
   return { image: b64, mime: "image/png" };
 }
 
-async function callGemini(jpeg, style) {
+async function callGemini(jpeg, opts) {
   const p = PROVIDERS.gemini;
   const body = {
-    contents: [{ role: "user", parts: [{ text: prompt(style) }, { inline_data: { mime_type: "image/jpeg", data: jpeg.toString("base64") } }] }],
+    contents: [{ role: "user", parts: [{ text: prompt(opts) }, { inline_data: { mime_type: "image/jpeg", data: jpeg.toString("base64") } }] }],
     generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
   };
   const url = `${GEMINI_BASE}/models/${encodeURIComponent(p.model)}:generateContent`;
@@ -153,9 +168,11 @@ const server = http.createServer(async (req, res) => {
       if (jpeg.length < 1000) throw new HttpError(400, "没有收到图片。");
       const ratio = Number(body.ratio) || 1;
       const style = STYLE[body.style] ? body.style : "cute";
+      const detail = Math.max(0, Math.min(4, Math.round(Number(body.detail ?? 2)) || 0));
+      const opts = { style, detail, background: body.background === true };
       const t = Date.now();
-      const out = provider === "openai" ? await callOpenAI(jpeg, style, ratio) : await callGemini(jpeg, style);
-      console.log(`[redraw] ${provider} ${style} ${Math.round(jpeg.length / 1024)}KB ${Date.now() - t}ms`);
+      const out = provider === "openai" ? await callOpenAI(jpeg, opts, ratio) : await callGemini(jpeg, opts);
+      console.log(`[redraw] ${provider} ${style} d${detail}${opts.background ? " bg" : ""} ${Math.round(jpeg.length / 1024)}KB ${Date.now() - t}ms`);
       return send(res, 200, out);
     }
     if (url.pathname.startsWith("/api/")) throw new HttpError(404, "Not found");

@@ -123,6 +123,9 @@ input[type=range]::-moz-range-thumb { width: 24px; height: 24px; border: 0; bord
 
 .orig { border-radius: 16px; overflow: hidden; box-shadow: var(--press-sm); padding: 6px; }
 .orig img { display: block; width: 100%; height: auto; border-radius: 11px; }
+.note { font-size: 12px; color: var(--muted); line-height: 1.5; }
+.note.warn { color: var(--accent); font-weight: 700; }
+.ctl.dim { opacity: 0.45; }
 .status { min-height: 1.5em; color: var(--muted); font-size: 15px; }
 .status.err { color: #c2412d; }
 .tips { color: var(--muted); font-size: 13px; border-radius: 22px; padding: 18px 20px; box-shadow: var(--press-sm); display: flex; flex-direction: column; gap: 6px; }
@@ -165,6 +168,7 @@ input[type=range]::-moz-range-thumb { width: 24px; height: 24px; border: 0; bord
           <button class="tool" type="button" data-tool="pen" aria-pressed="false">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20l4-1 11-11-3-3L5 16z"/><path d="M14 7l3 3"/></svg>画笔</button>
         </div>
+        <label class="brush" for="size">大小 <input type="range" id="size" min="30" max="160" step="1" value="100"></label>
         <label class="brush" for="brush">笔刷 <input type="range" id="brush" min="1" max="5" step="1" value="2"></label>
         <button class="tool plain" type="button" id="undo" disabled>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>撤销</button>
@@ -173,7 +177,7 @@ input[type=range]::-moz-range-thumb { width: 24px; height: 24px; border: 0; bord
         <canvas id="sheet" width="1654" height="2339" aria-label="线描图纸，可以拖动和修改"></canvas>
         <div class="busy" id="busy" hidden><div><div class="spinner"></div><div id="busyText">处理中…</div></div></div>
       </div>
-      <div class="hint" id="hint">移动：拖动画面改位置，两指捏合改大小。橡皮：擦掉多余的线。画笔：补上缺的线。</div>
+      <div class="hint" id="hint">移动：拖动画面改位置，用“大小”滑块或两指捏合改大小。橡皮：擦掉多余的线。画笔：补上缺的线。</div>
       <div class="status" id="status" role="status" aria-live="polite"></div>
     </section>
 
@@ -200,10 +204,31 @@ input[type=range]::-moz-range-thumb { width: 24px; height: 24px; border: 0; bord
       <div class="card">
         <h2>线条</h2>
         <div class="ctl">
+          <label for="detail">细节多少</label>
+          <input type="range" id="detail" min="0" max="4" step="1" value="2">
+          <div class="scale"><span>简单勾勒</span><span>丰富细节</span></div>
+          <div class="note" id="detailNote">AI 会按这个档位重新画，改了之后点“重新画一张”。</div>
+        </div>
+        <div class="ctl">
           <label for="weight">线条粗细</label>
           <input type="range" id="weight" min="0" max="4" step="1" value="1">
           <div class="scale"><span>很细</span><span>粗</span></div>
         </div>
+      </div>
+      <div class="card" id="bgCard">
+        <h2>背景</h2>
+        <label class="switch" for="bgOn"><input type="checkbox" id="bgOn"><span class="knob"></span><span>保留背景</span></label>
+        <div class="ctl dim" id="bgShadeBox">
+          <label for="bgShade">背景深浅</label>
+          <input type="range" id="bgShade" min="1" max="10" step="1" value="5" disabled>
+          <div class="scale"><span>很浅</span><span>和主体一样深</span></div>
+        </div>
+        <div class="ctl dim" id="bgWeightBox">
+          <label for="bgWeight">背景线条粗细</label>
+          <input type="range" id="bgWeight" min="0" max="4" step="1" value="1" disabled>
+          <div class="scale"><span>很细</span><span>粗</span></div>
+        </div>
+        <div class="note" id="bgNote">关闭时只保留主体。打开后，背景用浅一些的线画出来，主体更突出。</div>
       </div>
       <div class="card">
         <h2>纸张</h2>
@@ -213,11 +238,6 @@ input[type=range]::-moz-range-thumb { width: 24px; height: 24px; border: 0; bord
             <button type="button" data-orient="portrait" aria-pressed="true">竖版</button>
             <button type="button" data-orient="landscape" aria-pressed="false">横版</button>
           </div>
-        </div>
-        <div class="ctl">
-          <label for="size">图案大小</label>
-          <input type="range" id="size" min="30" max="160" step="1" value="100">
-          <div class="scale"><span>小</span><span>大</span></div>
         </div>
         <button class="tool plain" type="button" id="recenter">放回中间</button>
         <label class="switch" for="thumb"><input type="checkbox" id="thumb" checked><span class="knob"></span><span>左上角显示彩色原图</span></label>
@@ -325,17 +345,22 @@ function erode(src, w, h, r) {
   const d = dilate(inv, w, h, r); for (let i = 0; i < w * h; i++) d[i] = d[i] ? 0 : 1; return d;
 }
 
-function buildBase() {
-  const w = state.w, h = state.h, n = w * h, g = state.gray, weight = +$("weight").value;
-  let ink = new Uint8Array(n);
-  for (let i = 0; i < n; i++) ink[i] = g[i] < 150 ? 1 : 0;
-  const { lab, areas } = components(ink, w, h);
+function cleanInk(ink, w, h, weight) {
+  const n = w * h, { lab, areas } = components(ink, w, h);
   const minA = Math.round(12 * (Math.max(w, h) / 1200) ** 2);
   for (let i = 0; i < n; i++) if (ink[i] && areas[lab[i]] < minA) ink[i] = 0;
-  if (weight === 0) { const t = erode(ink, w, h, 1); let kept = 0, was = 0; for (let i = 0; i < n; i++) { kept += t[i]; was += ink[i]; } if (kept > was * 0.35) ink = t; }
-  else ink = dilate(ink, w, h, weight - 1);
+  if (weight === 0) { const t = erode(ink, w, h, 1); let kept = 0, was = 0; for (let i = 0; i < n; i++) { kept += t[i]; was += ink[i]; } return kept > was * 0.35 ? t : ink; }
+  return dilate(ink, w, h, weight - 1);
+}
+
+function buildBase() {
+  const w = state.w, h = state.h, n = w * h;
+  const subj = cleanInk(state.subj.slice(), w, h, +$("weight").value);
+  const showBg = state.hasBg && $("bgOn").checked;
+  const bg = showBg ? cleanInk(state.bgInk.slice(), w, h, +$("bgWeight").value) : null;
+  const bgA = Math.round(255 * (+$("bgShade").value) / 10);
   const base = canvas(w, h), bx = base.getContext("2d"), im = bx.createImageData(w, h);
-  for (let i = 0; i < n; i++) if (ink[i]) im.data[i * 4 + 3] = 255;
+  for (let i = 0; i < n; i++) im.data[i * 4 + 3] = subj[i] ? 255 : bg && bg[i] ? bgA : 0;
   bx.putImageData(im, 0, 0);
   state.base = base;
 }
@@ -423,6 +448,7 @@ async function process(file) {
       r = await fetch("api/redraw", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ image: photo.toDataURL("image/jpeg", 0.9), ratio: photo.width / photo.height, style: state.style,
+          detail: +$("detail").value, background: $("bgOn").checked,
           provider: $("provider").value || undefined, passcode: $("passcode").value.trim() || undefined }),
       });
     } catch (e) { throw new Error("连不上服务器。请检查网络后再试。"); }
@@ -430,12 +456,20 @@ async function process(file) {
     if (!r.ok || !j.image) throw new Error(j.error || "服务器出错了（" + r.status + "），请稍后再试。");
     busy("正在整理线条…"); await tick();
     const out = toWork(await decode(b64ToBlob(j.image, j.mime)), WORK), w = out.width, h = out.height;
-    const d = out.getContext("2d").getImageData(0, 0, w, h).data, gray = new Uint8Array(w * h);
-    for (let i = 0; i < w * h; i++) gray[i] = (d[i * 4] * 0.299 + d[i * 4 + 1] * 0.587 + d[i * 4 + 2] * 0.114) | 0;
-    Object.assign(state, { img: toWork(photo, WORK), w, h, gray, strokes: [], isSample: false });
+    const d = out.getContext("2d").getImageData(0, 0, w, h).data, subj = new Uint8Array(w * h), bgInk = new Uint8Array(w * h);
+    const askedBg = $("bgOn").checked; let blue = 0;
+    for (let i = 0; i < w * h; i++) {
+      const r = d[i * 4], g = d[i * 4 + 1], b = d[i * 4 + 2], lum = r * 0.299 + g * 0.587 + b * 0.114, bluish = b - Math.max(r, g);
+      if (askedBg && bluish > 45 && b > 110) { bgInk[i] = 1; blue++; }
+      else if (lum < 150 && bluish < 35) subj[i] = 1;
+    }
+    Object.assign(state, { img: toWork(photo, WORK), w, h, subj, bgInk, hasBg: askedBg && blue > 50, gray: true, strokes: [], isSample: false });
+    state.genDetail = +$("detail").value;
     $("srcImg").src = photo.toDataURL("image/jpeg", 0.85); $("srcTag").hidden = true;
     buildBase(); rebuildLayer(); fit(); compose();
-    setStatus("完成！可以用橡皮擦掉多余的线，拖动或缩放图案。不满意可以点“重新画一张”。");
+    setStatus(askedBg && !state.hasBg ? "完成！不过这次 AI 没有把背景分开画，背景开关和深浅调不了，可以点“重新画一张”再试。"
+      : "完成！可以用橡皮擦掉多余的线，拖动或缩放图案。不满意可以点“重新画一张”。");
+    syncNotes();
   } catch (e) {
     console.error(e);
     setStatus(e && e.message ? e.message : String(e), true);
@@ -520,6 +554,25 @@ for (const b of document.querySelectorAll("[data-tool]")) b.addEventListener("cl
 $("undo").addEventListener("click", () => { state.strokes.pop(); rebuildLayer(); compose(); });
 
 let pending = null;
+const DETAIL_NAMES = ["很简单", "简单", "适中", "丰富", "很丰富"];
+function syncNotes() {
+  const on = $("bgOn").checked;
+  for (const id of ["bgShade", "bgWeight"]) $(id).disabled = !on;
+  $("bgShadeBox").classList.toggle("dim", !on); $("bgWeightBox").classList.toggle("dim", !on);
+  const needBg = on && state.photo && !state.hasBg;
+  $("bgNote").textContent = needBg ? "这张图生成时没有背景。点“重新画一张”，AI 会把背景一起画出来。" :
+    on ? "背景用浅一些的线画，主体更突出。深浅和粗细可以随时调。" : "关闭时只保留主体。打开后，背景用浅一些的线画出来，主体更突出。";
+  $("bgNote").classList.toggle("warn", !!needBg);
+  const changed = state.photo && state.genDetail !== undefined && state.genDetail !== +$("detail").value;
+  $("detailNote").textContent = changed ? `已选“${DETAIL_NAMES[+$("detail").value]}”。点“重新画一张”让 AI 按新的细节重画。` : "AI 会按这个档位重新画，改了之后点“重新画一张”。";
+  $("detailNote").classList.toggle("warn", !!changed);
+}
+$("detail").addEventListener("input", syncNotes);
+$("bgOn").addEventListener("change", () => { syncNotes(); if (state.subj) { buildBase(); rebuildLayer(); compose(); } });
+for (const id of ["bgShade", "bgWeight"]) $(id).addEventListener("input", () => {
+  if (!state.hasBg) return;
+  clearTimeout(pending); pending = setTimeout(() => { buildBase(); rebuildLayer(); compose(); }, 80);
+});
 for (const id of ["weight"]) $(id).addEventListener("input", () => {
   if (!state.gray) { setStatus("示例图不能调这一项。先拍照或选一张你的照片。"); return; }
   clearTimeout(pending); pending = setTimeout(() => { buildBase(); rebuildLayer(); compose(); }, 120);
